@@ -38,5 +38,7 @@ sysgud-telegram.workspace = true
 dotenvy = "0.15"
 
 [profile.release]
+opt-level = 3
+codegen-units = 1
 lto = "thin"
 strip = true

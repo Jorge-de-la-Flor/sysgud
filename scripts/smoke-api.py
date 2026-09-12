@@ -1,4 +1,5 @@
 """Exercise the real binary over HTTP, with isolated state and no external services."""
+import argparse
 import concurrent.futures
 import json
 import os
@@ -12,7 +13,13 @@ import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-BINARY = ROOT / "target" / "debug" / ("sysgud.exe" if os.name == "nt" else "sysgud")
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--binary", type=pathlib.Path,
+                    default=ROOT / "target" / "debug" / ("sysgud.exe" if os.name == "nt" else "sysgud"),
+                    help="Executable to verify; defaults to the debug build")
+BINARY = parser.parse_args().binary.resolve()
+if not BINARY.is_file():
+    parser.error("The requested executable does not exist; compile it first")
 TOKEN = secrets.token_hex(32)
 with socket.socket() as probe:
     probe.bind(("127.0.0.1", 0))

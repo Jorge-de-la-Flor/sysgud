@@ -69,6 +69,8 @@ docker compose down
 
 El volumen `sysgud-data` conserva el historial entre arranques. Usa este despliegue o `scripts/start.ps1` para el servicio real; evita dos instancias consultando el mismo bot.
 
+Si ya tienes la entrega compilada, puedes evitar la compilacion durante el video: ejecuta `./target/release/sysgud.exe` desde la raiz en Windows, o carga `target/release-package/linux/sysgud-image.tar.gz` y arranca `sysgud:release` siguiendo [Entrega de release](README.md#entrega-de-release). El artefacto Linux se descarga de GitHub Actions despues de un push exitoso a `main`. Deja el servicio iniciado antes de ejecutar `python scripts/demo-telegram.py`; la demo local `demo-api.py` sigue usando el binario de `target/debug`.
+
 ## Telegram real junto a la API
 
 Prepara esta parte antes de grabar. Requiere conexion a Internet, un token de bot valido en `.env` y vincular tu cuenta privada. El token del bot y el token Bearer de la API son credenciales distintas; no los muestres en el video.

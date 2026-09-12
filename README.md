@@ -65,6 +65,42 @@ docker compose -f compose.demo.yaml up --build --abort-on-container-exit --exit-
 
 Levanta una API aislada y un contenedor de pruebas; termina con código cero si la demo pasa. Para iniciar el servicio con tu `.env` ya configurado, usa `docker compose up --build -d`. Consulta los pasos y la persistencia en [DEMO.md](DEMO.md). No ejecutes la instancia local y el contenedor con el mismo bot simultáneamente.
 
+## Entrega de release
+
+Para compilar el ejecutable optimizado de Windows:
+
+```powershell
+cargo build --workspace --locked --release
+./target/release/sysgud.exe --check
+./target/release/sysgud.exe
+```
+
+El archivo entregable es `target/release/sysgud.exe`. Ejecútalo desde la carpeta que contiene tu `.env`; para usar el ejecutable ya compilado no hace falta Rust. `--check` valida la configuración, pero no prueba las credenciales externas.
+
+Tras un push a `main`, el [workflow de GitHub Actions](https://github.com/Jorge-de-la-Flor/sysgud/actions/workflows/rust.yml) genera el artefacto **sysgud-linux-release** si pasa la demo Docker. Incluye el binario Linux `sysgud`, la imagen `sysgud-image.tar.gz`, `SHA256SUMS` y `RELEASE.txt`. Los artefactos se conservan siete días. Descarga el de la ejecución correcta y extrae su ZIP en `target/release-package/linux`.
+
+Con Docker Desktop iniciado en modo Linux, carga la imagen sin recompilarla:
+
+```powershell
+docker load -i target/release-package/linux/sysgud-image.tar.gz
+```
+
+Desde la raíz del proyecto, con `.env` configurado y la instancia anterior detenida, inicia la imagen:
+
+```powershell
+docker run -d --name sysgud --env-file .env `
+  -e SYSGUD_LOAD_DOTENV=false -e SYSGUD_MONITOR_ENABLED=false `
+  -e SYSGUD_API_HOST=0.0.0.0 -e SYSGUD_API_PORT=3000 `
+  -e SYSGUD_DATABASE=/app/.data/sysgud.sqlite `
+  -p 127.0.0.1:3000:3000 -v sysgud-data:/app/.data `
+  --read-only --tmpfs "/tmp:rw,noexec,nosuid,mode=1777,size=16m" `
+  --cap-drop ALL --security-opt no-new-privileges:true sysgud:release
+```
+
+Las credenciales se entregan al iniciar y nunca se incluyen en la imagen. La API queda accesible solo desde el equipo en `http://127.0.0.1:3000`. Consulta `docker logs --tail 50 sysgud`; detén con `docker stop sysgud` y vuelve a iniciar con `docker start sysgud`. El volumen `sysgud-data` conserva los datos de este contenedor; Compose administra un volumen separado bajo el nombre de su proyecto. Mantén una sola instancia consultando el mismo bot de Telegram.
+
+El binario `sysgud` del artefacto es para Linux, no Windows. Para ejecutarlo directamente en Linux, restaura el permiso con `chmod +x sysgud`; cargar la imagen con Docker conserva los permisos automáticamente.
+
 ## Monitor y política de acciones
 
 Establece `SYSGUD_MONITOR_ENABLED=true`, `SYSGUD_TARGET_CMD` y `SYSGUD_TARGET_ARGS`. Los argumentos aceptan un array JSON, incluyendo `[]`. También se conserva la sintaxis simple de comillas sin expansión de variables. Una configuración inválida falla al iniciar.
