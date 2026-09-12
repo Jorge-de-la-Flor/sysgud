@@ -1,0 +1,21 @@
+name: Rust checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - run: cargo +stable fmt --all --check
+      - run: cargo +stable test --workspace --locked
+      - run: cargo +stable clippy --workspace --locked --all-targets --all-features -- -D warnings
+      - run: python scripts/check-boundaries.py
+      - run: cargo +stable build --locked
+      - run: python scripts/smoke-api.py
