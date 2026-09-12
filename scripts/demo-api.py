@@ -49,7 +49,7 @@ class Demo:
     def start(self):
         env = dict(
             os.environ, SYSGUD_LOAD_DOTENV="false", SYSGUD_BOT_API_TOKEN=self.token,
-            SYSGUD_API_PORT=str(self.port), SYSGUD_DATABASE=str(self.directory / "state.sqlite"),
+            SYSGUD_API_PORT=str(self.port), SYSGUD_API_HOST="127.0.0.1", SYSGUD_DATABASE=str(self.directory / "state.sqlite"),
             SYSGUD_ALLOWED_TELEGRAM_USER_IDS="123", TELEGRAM_ALLOWLIST="",
             SYSGUD_MONITOR_ENABLED="false", SYSGUD_TELEGRAM_ENABLED="false",
             TELEGRAM_CHAT_ID="", TELEGRAM_BOT_TOKEN="", ANTHROPIC_API_KEY="",

@@ -12,6 +12,7 @@ pub struct Config {
     pub token: String,
     pub allowed_users: String,
     pub api_port: u16,
+    pub api_host: std::net::Ipv4Addr,
     pub monitor_enabled: bool,
     pub telegram_enabled: bool,
     pub telegram_token: Option<String>,
@@ -62,6 +63,9 @@ impl Config {
             token: env::var("SYSGUD_BOT_API_TOKEN").unwrap_or_default(),
             allowed_users: allowed_users()?,
             api_port: number("SYSGUD_API_PORT", 3000, 1, 65535)? as u16,
+            api_host: parse_api_host(
+                &env::var("SYSGUD_API_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
+            )?,
             monitor_enabled: boolean("SYSGUD_MONITOR_ENABLED", true)?,
             telegram_enabled: boolean("SYSGUD_TELEGRAM_ENABLED", false)?,
             telegram_token: env::var("TELEGRAM_BOT_TOKEN")
@@ -92,6 +96,14 @@ impl Config {
                 .map_err(|_| anyhow!("SYSGUD_COMMANDS_JSON inválido"))?,
             },
         })
+    }
+}
+
+fn parse_api_host(value: &str) -> Result<std::net::Ipv4Addr> {
+    match value {
+        "127.0.0.1" => Ok(std::net::Ipv4Addr::LOCALHOST),
+        "0.0.0.0" => Ok(std::net::Ipv4Addr::UNSPECIFIED),
+        _ => Err(anyhow!("SYSGUD_API_HOST debe ser 127.0.0.1 o 0.0.0.0")),
     }
 }
 
@@ -197,6 +209,21 @@ fn default_demo_args() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn api_binding_requires_an_explicit_supported_address() {
+        assert_eq!(
+            parse_api_host("127.0.0.1").unwrap(),
+            std::net::Ipv4Addr::LOCALHOST
+        );
+        assert_eq!(
+            parse_api_host("0.0.0.0").unwrap(),
+            std::net::Ipv4Addr::UNSPECIFIED
+        );
+        for invalid in ["", "localhost", "::", "192.168.1.1", "0.0.0.0:3000"] {
+            assert!(parse_api_host(invalid).is_err());
+        }
+    }
+
     #[test]
     fn parses_windows_paths_quotes_and_empty_arguments() {
         assert_eq!(

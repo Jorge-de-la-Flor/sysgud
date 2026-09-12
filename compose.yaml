@@ -1,0 +1,32 @@
+name: sysgud
+
+services:
+  sysgud:
+    build:
+      context: .
+      target: runtime
+    image: sysgud:local
+    env_file:
+      - .env
+    environment:
+      SYSGUD_API_HOST: 0.0.0.0
+      SYSGUD_API_PORT: "3000"
+      SYSGUD_DATABASE: /app/.data/sysgud.sqlite
+      SYSGUD_LOAD_DOTENV: "false"
+      SYSGUD_MONITOR_ENABLED: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - sysgud-data:/app/.data
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 15s
+
+volumes:
+  sysgud-data:

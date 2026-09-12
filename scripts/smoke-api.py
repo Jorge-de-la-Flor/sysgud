@@ -37,7 +37,7 @@ def call(path, method="GET", data=None, authenticated=True):
 
 def start(database):
     env = dict(os.environ, SYSGUD_LOAD_DOTENV="false", SYSGUD_BOT_API_TOKEN=TOKEN,
-               SYSGUD_API_PORT=str(PORT), SYSGUD_DATABASE=str(database),
+               SYSGUD_API_PORT=str(PORT), SYSGUD_API_HOST="127.0.0.1", SYSGUD_DATABASE=str(database),
                SYSGUD_ALLOWED_TELEGRAM_USER_IDS="123", TELEGRAM_ALLOWLIST="",
                SYSGUD_MONITOR_ENABLED="false", SYSGUD_TELEGRAM_ENABLED="false",
                TELEGRAM_CHAT_ID="", TELEGRAM_BOT_TOKEN="", ANTHROPIC_API_KEY="",

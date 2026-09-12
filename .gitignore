@@ -9,3 +9,5 @@
 *.pdb
 .atl/
 .gga
+__pycache__/
+*.pyc

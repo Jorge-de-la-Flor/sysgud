@@ -21,11 +21,33 @@ Si aún no tienes `.env`, copia `.env.example` una sola vez. Si ya existe, cons�
 - `SYSGUD_ALLOWED_TELEGRAM_USER_IDS`: IDs numéricos de quienes pueden decidir; vacío bloquea todas las decisiones.
 - Para iniciar solo la API, establece `SYSGUD_MONITOR_ENABLED=false`.
 
-La API escucha exclusivamente en `http://127.0.0.1:3000`. `--check` valida la configuración y abre la base, pero no inicia procesos supervisados ni conexiones a Telegram/Anthropic. Ningún script modifica tu `.env`.
+La API escucha por defecto en `http://127.0.0.1:3000`. `SYSGUD_API_HOST=0.0.0.0` permite escuchar dentro de un contenedor; Compose publica el puerto solo en la interfaz local del equipo. `--check` valida la configuración y abre la base, pero no inicia procesos supervisados ni conexiones a Telegram/Anthropic. El arranque y las demos no modifican tu `.env`.
 
 ## Telegram
 
 Tu token de BotFather va en `TELEGRAM_BOT_TOKEN` dentro de `.env`. Es diferente de `SYSGUD_BOT_API_TOKEN`.
+
+Con el servidor detenido, vincula tu cuenta desde el enlace privado:
+
+```powershell
+python scripts/connect-telegram.py --open --wait 900
+```
+
+Pulsa **Iniciar / Start** en Telegram. El script valida el token, vincula el ID del remitente del enlace y configura el menú del bot. Actualiza solo las listas de usuarios, el chat de avisos y los interruptores de Telegram y monitor en `.env`; conserva las demás claves. El enlace caduca a los 15 minutos. Un webhook existente impide la vinculación y no se elimina. El monitor queda desactivado para preparar la demo. Después inicia `./scripts/start.ps1`.
+
+En Windows, `./scripts/start-telegram.ps1` vincula la cuenta y arranca el servicio en una sola ejecución. No lo ejecutes a la vez que otro servidor del mismo bot.
+
+Para grabar el flujo, usa `python scripts/demo-api.py` o, con Telegram vinculado y el servicio iniciado, `python scripts/demo-telegram.py`. El [guion de video](DEMO.md) incluye ambas demostraciones y sus requisitos.
+
+## Contenedores
+
+Con Docker y Compose disponibles, la prueba completa sin credenciales externas se ejecuta con:
+
+```powershell
+docker compose -f compose.demo.yaml up --build --abort-on-container-exit --exit-code-from demo
+```
+
+Levanta una API aislada y un contenedor de pruebas; termina con código cero si la demo pasa. Para iniciar el servicio con tu `.env` ya configurado, usa `docker compose up --build -d`. Consulta los pasos y la persistencia en [DEMO.md](DEMO.md). No ejecutes la instancia local y el contenedor con el mismo bot simultáneamente.
 
 Para habilitar el bot, añade usuarios permitidos y establece `SYSGUD_TELEGRAM_ENABLED=true`. `TELEGRAM_ALLOWLIST` se admite como alias de la rama original; si ambas listas tienen valores deben coincidir. `TELEGRAM_CHAT_ID` es opcional y debe ser el chat privado de uno de esos usuarios para recibir avisos de nuevos incidentes.
 

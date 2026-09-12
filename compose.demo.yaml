@@ -1,0 +1,58 @@
+# Standalone, disposable demo. Does not read .env or publish any host port.
+# The public token below authenticates this isolated demo only; never reuse it.
+name: sysgud-demo
+
+services:
+  api:
+    build:
+      context: .
+      target: runtime
+    image: sysgud:local
+    environment:
+      SYSGUD_API_HOST: 0.0.0.0
+      SYSGUD_API_PORT: "3000"
+      SYSGUD_LOAD_DOTENV: "false"
+      SYSGUD_DATABASE: /app/.data/demo.sqlite
+      SYSGUD_BOT_API_TOKEN: public-container-demo-only-0123456789abcdef0123456789abcdef
+      SYSGUD_ALLOWED_TELEGRAM_USER_IDS: "123"
+      TELEGRAM_ALLOWLIST: ""
+      SYSGUD_MONITOR_ENABLED: "false"
+      SYSGUD_TELEGRAM_ENABLED: "false"
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+      ANTHROPIC_API_KEY: ""
+      SYSGUD_COMMANDS_JSON: "{}"
+      SYSGUD_APPROVAL_TTL_SECONDS: "900"
+    read_only: true
+    tmpfs:
+      - /app/.data:mode=0700,uid=10001,gid=10001,size=32m
+      - /tmp:mode=1777,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - demo
+
+  demo:
+    build:
+      context: .
+      target: demo
+    image: sysgud-demo:local
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      SYSGUD_DEMO_API_URL: http://api:3000
+      SYSGUD_DEMO_API_TOKEN: public-container-demo-only-0123456789abcdef0123456789abcdef
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - demo
+
+networks:
+  demo:
+    internal: true

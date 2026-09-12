@@ -1,0 +1,29 @@
+# Allow only files needed by the build; local credentials never enter its context.
+**
+!Dockerfile
+!Cargo.toml
+!Cargo.lock
+!src/
+!src/**
+!crates/
+!crates/**
+!scripts/
+!scripts/smoke-container.py
+
+# Also exclude these if somebody places them under an allowed source directory.
+**/.env
+**/.env.*
+**/.data
+**/.data/**
+**/target
+**/target/**
+**/.git
+**/.git/**
+**/backups
+**/backups/**
+**/*.sqlite
+**/*.sqlite-*
+**/*.pem
+**/*.key
+**/__pycache__
+**/__pycache__/**

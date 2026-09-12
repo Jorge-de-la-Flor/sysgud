@@ -17,5 +17,21 @@ jobs:
       - run: cargo +stable test --workspace --locked
       - run: cargo +stable clippy --workspace --locked --all-targets --all-features -- -D warnings
       - run: python scripts/check-boundaries.py
+      - run: python -m unittest discover -s scripts -p "test_*.py"
       - run: cargo +stable build --locked
       - run: python scripts/smoke-api.py
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build containers and run the demo
+        run: docker compose -f compose.demo.yaml up --build --abort-on-container-exit --exit-code-from demo
+      - name: Container logs
+        if: failure()
+        run: docker compose -f compose.demo.yaml logs --no-color
+      - name: Stop demo containers
+        if: always()
+        run: docker compose -f compose.demo.yaml down

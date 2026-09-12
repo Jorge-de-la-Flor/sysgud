@@ -54,8 +54,7 @@ pub async fn run() -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let listener =
-        tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, config.api_port)).await?;
+    let listener = tokio::net::TcpListener::bind((config.api_host, config.api_port)).await?;
     println!("sysgud API: http://{}", listener.local_addr()?);
     let (stop, receiver) = watch::channel(false);
     let notifications = telegram
