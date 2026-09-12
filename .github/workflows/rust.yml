@@ -1,0 +1,84 @@
+name: Rust checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - run: cargo +stable fmt --all --check
+      - run: cargo +stable test --workspace --locked
+      - run: cargo +stable clippy --workspace --locked --all-targets --all-features -- -D warnings
+      - run: python scripts/check-boundaries.py
+      - run: python -m unittest discover -s scripts -p "test_*.py"
+      - run: cargo +stable build --locked
+      - run: python scripts/smoke-api.py
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build containers and run the demo
+        run: docker compose -f compose.demo.yaml up --build --abort-on-container-exit --exit-code-from demo
+      - name: Package the tested Linux release
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="${RUNNER_TEMP}/sysgud-linux-release"
+          mkdir -p "$package_dir"
+          short_sha="${GITHUB_SHA:0:12}"
+          docker image tag sysgud:local sysgud:release
+          docker image tag sysgud:local "sysgud:sha-${short_sha}"
+          image_id="$(docker image inspect --format '{{.Id}}' sysgud:release)"
+
+          # Extract from a fresh, stopped container, never the demo's data volume.
+          container_id="$(docker create sysgud:release)"
+          if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Docker did not return a valid container ID" >&2
+            exit 1
+          fi
+          trap 'docker rm "$container_id" >/dev/null' EXIT
+          docker cp "${container_id}:/usr/local/bin/sysgud" "$package_dir/sysgud"
+          docker rm "$container_id" >/dev/null
+          trap - EXIT
+
+          docker image save sysgud:release "sysgud:sha-${short_sha}" \
+            | gzip -n > "$package_dir/sysgud-image.tar.gz"
+          printf 'Commit: %s\nImage ID: %s\nTags: sysgud:release sysgud:sha-%s\nPlatform: linux/amd64\nBinary: sysgud (restore execute permission with chmod +x sysgud after download)\nImage: sysgud-image.tar.gz (load with docker image load --input sysgud-image.tar.gz)\nValidation: isolated container HTTP demo passed before packaging\n' \
+            "$GITHUB_SHA" "$image_id" "$short_sha" > "$package_dir/RELEASE.txt"
+          test -s "$package_dir/sysgud"
+          test -s "$package_dir/sysgud-image.tar.gz"
+          (
+            cd "$package_dir"
+            sha256sum sysgud-image.tar.gz sysgud RELEASE.txt > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+      - name: Upload the tested Linux release
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sysgud-linux-release
+          path: |
+            ${{ runner.temp }}/sysgud-linux-release/sysgud-image.tar.gz
+            ${{ runner.temp }}/sysgud-linux-release/sysgud
+            ${{ runner.temp }}/sysgud-linux-release/SHA256SUMS
+            ${{ runner.temp }}/sysgud-linux-release/RELEASE.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Container logs
+        if: failure()
+        run: docker compose -f compose.demo.yaml logs --no-color
+      - name: Stop demo containers
+        if: always()
+        run: docker compose -f compose.demo.yaml down

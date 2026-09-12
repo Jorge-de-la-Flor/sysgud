@@ -1,15 +1,44 @@
-[package]
-name = "sysgud"
-version = "0.1.0"
-edition = "2021"
-description = "Autonomous, zero-latency system runtime agent for proactive terminal debugging and process remediation."
+[workspace]
+members = ["crates/*"]
+resolver = "2"
 
-[dependencies]
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.11", features = ["json"] }
-openssl-sys = { version = "0.9", features = ["vendored"] }
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
-colored = "2.0"
-anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "sync", "time", "signal", "fs"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sysgud-core = { path = "crates/sysgud-core" }
+sysgud-runtime = { path = "crates/sysgud-runtime" }
+sysgud-api = { path = "crates/sysgud-api" }
+sysgud-telegram = { path = "crates/sysgud-telegram" }
+
+[package]
+name = "sysgud"
+version.workspace = true
+edition.workspace = true
+description = "Local process diagnostics with authenticated, durable approval of remediations."
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+sysgud-core.workspace = true
+sysgud-runtime.workspace = true
+sysgud-api.workspace = true
+sysgud-telegram.workspace = true
+dotenvy = "0.15"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+strip = true

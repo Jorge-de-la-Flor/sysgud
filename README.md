@@ -1,167 +1,144 @@
-# sysgud 🛡️
+# sysgud
 
-> **Agente de runtime autónomo y de baja latencia, escrito en Rust, para debugging proactivo y remediación de procesos directo en la terminal.**
+Agente local de diagnóstico de procesos con API REST, almacenamiento SQLite y bot de Telegram. Los logs generan propuestas; KILL y EXECUTE requieren la aprobación de un usuario permitido. Las decisiones se reservan en disco antes de actuar y no se reejecutan después de un reinicio.
 
-![Language](https://img.shields.io/badge/Language-Rust-orange.svg)
-![Runtime](https://img.shields.io/badge/Runtime-Tokio-blue.svg)
-![License](https://img.shields.io/badge/License-Proprietary-lightgrey.svg)
-![Architecture](https://img.shields.io/badge/Architecture-Single_Crate-purple.svg)
+Esta versión integra `origin/telegram` (`3ee537c`), la API local anterior y el parche de protección del runtime. El historial y los documentos `openspec/changes/` de upstream se conservan como antecedentes; el contrato vigente está en [API.md](API.md).
 
----
+## Arranque en Windows
 
-## 📌 Overview
+Desde la carpeta del proyecto:
 
-**sysgud** saca a los agentes de IA del chatbox tradicional y los mete directo en el entorno de sistema operativo del desarrollador. Corriendo como un daemon autónomo en segundo plano, **sysgud** monitorea streams de salida de procesos (`stdout`/`stderr`) con latencia sub-segundo, mantiene un buffer circular de contexto en memoria, y diagnostica fallas (memory leaks, panics, excepciones no manejadas) de forma independiente al ocurrir.
-
-En vez de requerir cambio manual de contexto o copiar-pegar logs, **sysgud** extrae el límite exacto de la falla, consulta a un motor de razonamiento LLM, y despacha remediaciones automatizadas directo a la sesión de shell nativa.
-
----
-
-## 🚀 Key Features
-
-* **Zero-Copy Log Ingestion:** streaming asíncrono del proceso supervisado, construido sobre Tokio.
-* **Smart Ring Buffer:** snapshot rotativo configurable (`RingBuffer`) que aísla el contexto justo antes de la falla.
-* **Sub-second Failure Triggering:** filtros de pattern-matching (`PANIC`, `CRITICAL`, `ERROR`) que evitan llamadas innecesarias al LLM.
-* **Structured Action Schema:** salidas JSON del LLM que deserializan a un tipo Rust estricto (`KILL`, `EXECUTE`, `NOTIFY`).
-* **Fallback seguro:** si no hay `ANTHROPIC_API_KEY` configurada, o la llamada al agente falla, el daemon nunca se cae — degrada a `NOTIFY`.
-* **Native Remediation Runner:** ejecución de comandos del SO vía `tokio::process::Command`, sin overhead de wrappers extra.
-
----
-
-## 📐 Architecture & Workflow
-
-```text
-+-------------------+      +-----------------------+      +-------------------------+
-| Target Process    | ---> | Tokio Async Reader    | ---> | Ring Buffer (N líneas)  |
-| (stdout / stderr) |      | (mod monitor)         |      | (VecDeque en memoria)   |
-+-------------------+      +-----------------------+      +-------------------------+
-                                                                       |
-                                                           [Anomaly Pattern Detected]
-                                                                       v
-+-------------------+      +-----------------------+      +-------------------------+
-| Native Shell / OS | <--- | Action Runner         | <--- | Agent Engine            |
-| (Kill / Exec / UI)|      | (mod actions)         |      | (mod agent, JSON)       |
-+-------------------+      +-----------------------+      +-------------------------+
+```powershell
+./scripts/start.ps1 -Check
+./scripts/start.ps1
 ```
 
-La orquestación entre estos tres módulos vive en `src/lib.rs`; `src/main.rs` es intencionalmente delgado y solo arranca el runtime async.
+El script usa Rust del PATH o, en esta computadora, las herramientas locales de `target/validation-tools`. En otros equipos instala Rust estable. Con Rust disponible, los equivalentes son `cargo run -- --check` y `cargo run`.
 
----
+Si aún no tienes `.env`, copia `.env.example` una sola vez. Si ya existe, consérvalo. Completa:
 
-## 📂 Project Structure
+- `SYSGUD_BOT_API_TOKEN`: secreto interno aleatorio de 32–256 caracteres ASCII sin espacios. Puedes generar 64 caracteres con `[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))`.
+- `SYSGUD_ALLOWED_TELEGRAM_USER_IDS`: IDs numéricos de quienes pueden decidir; vacío bloquea todas las decisiones.
+- Para iniciar solo la API, establece `SYSGUD_MONITOR_ENABLED=false`.
 
-Un solo crate (`cargo build` sin workspace, sin `path` deps entre proyectos). La separación por dominio (core / monitor / agent / actions) es puramente organizativa: son módulos de Rust, no crates independientes. Cada módulo con submódulos sigue la notación moderna de Rust 2018+ (`nombre.rs` conviviendo con la carpeta `nombre/`, en vez de `nombre/mod.rs`).
+La API escucha por defecto en `http://127.0.0.1:3000`. `SYSGUD_API_HOST=0.0.0.0` permite escuchar dentro de un contenedor; Compose publica el puerto solo en la interfaz local del equipo. `--check` valida la configuración y abre la base, pero no inicia procesos supervisados ni conexiones a Telegram/Anthropic. El arranque y las demos no modifican tu `.env`.
 
-```text
-sysgud/
-├── Cargo.toml              # Un solo paquete, todas las dependencias juntas
-├── .env.example            # Variables de entorno soportadas
-└── src/
-    ├── main.rs             # Binario delgado: solo arranca tokio y llama a sysgud::run()
-    ├── lib.rs              # Orquestación: monitor -> agent -> actions
-    │
-    ├── core.rs             # Tipos, config y errores compartidos (reemplaza a core/mod.rs)
-    ├── core/
-    │   ├── config.rs       # Config::from_env()
-    │   ├── error.rs        # SysgudError
-    │   └── types.rs        # ActionType, AgentRequest, AgentAction
-    │
-    ├── monitor.rs          # Ingesta y ventana de contexto ("Monitor")
-    ├── monitor/
-    │   ├── buffer.rs       # RingBuffer
-    │   └── reader.rs       # spawn() async de stdout/stderr
-    │
-    ├── agent.rs            # Motor de decisiones ("AgentEngine")
-    ├── agent/
-    │   ├── client.rs       # AgentClient: llamada a la API de Messages
-    │   └── prompt.rs       # System prompt + parsing defensivo del JSON
-    │
-    ├── actions.rs          # Ejecutor de acciones ("ActionRunner")
-    └── actions/
-        └── runner.rs       # dispatch por ActionType (reemplaza a runner/mod.rs)
-            └── runner/
-                ├── kill.rs
-                ├── execute_cmd.rs
-                └── notify.rs
+## Telegram
+
+Tu token de BotFather va en `TELEGRAM_BOT_TOKEN` dentro de `.env`. Es diferente de `SYSGUD_BOT_API_TOKEN`.
+
+Con el servidor detenido, vincula tu cuenta desde el enlace privado:
+
+```powershell
+python scripts/connect-telegram.py --open --wait 900
 ```
 
----
+Pulsa **Iniciar / Start** en Telegram. El script valida el token, vincula el ID del remitente del enlace y configura el menú del bot. Actualiza solo las listas de usuarios, el chat de avisos y los interruptores de Telegram y monitor en `.env`; conserva las demás claves. El enlace caduca a los 15 minutos. Un webhook existente impide la vinculación y no se elimina. El monitor queda desactivado para preparar la demo. Después inicia `./scripts/start.ps1`.
 
-## 🛠️ Getting Started
+En Windows, `./scripts/start-telegram.ps1` vincula la cuenta y arranca el servicio en una sola ejecución. No lo ejecutes a la vez que otro servidor del mismo bot.
 
-### Prerrequisitos
+Para grabar el flujo, usa `python scripts/demo-api.py` o, con Telegram vinculado y el servicio iniciado, `python scripts/demo-telegram.py`. El [guion de video](DEMO.md) incluye ambas demostraciones y sus requisitos.
 
-* Rust 1.75+ (`cargo`, `rustc`) — instalado vía [rustup](https://rustup.rs/) recomendado.
-* Python 3.x (opcional, solo para el script de demo que simula un crash).
-* Una `ANTHROPIC_API_KEY` si quieres diagnóstico en vivo del LLM (opcional: sin ella, el agente responde siempre `NOTIFY`).
+Para habilitar el bot, añade usuarios permitidos y establece `SYSGUD_TELEGRAM_ENABLED=true`. `TELEGRAM_ALLOWLIST` se admite como alias de la rama original; si ambas listas tienen valores deben coincidir. `TELEGRAM_CHAT_ID` es opcional y debe ser el chat privado de uno de esos usuarios para recibir avisos de nuevos incidentes.
 
-### Instalación y compilación
+Abre una conversación privada con tu bot y usa:
 
-```bash
-# Clonar el repositorio
-git clone https://github.com/tu-usuario/sysgud.git
-cd sysgud
+- `/status` o `/incidents`: hasta diez incidentes pendientes.
+- `/incident UUID`: detalle de la propuesta y la invocación configurada.
+- `/approve UUID`: aprobar exactamente ese incidente.
+- `/reject UUID`: rechazarlo.
+- `/help`: ayuda.
 
-# Copiar y completar las variables de entorno (opcional)
-cp .env.example .env
+Se conservan los sufijos como `/status@nombre_bot`. Los comandos globales `/approve` y `/reject` sin ID ya no deciden sobre una propuesta mutable. Usuarios ajenos a la lista, mensajes sin remitente y grupos se ignoran. El actor procede de `message.from.id`, nunca del texto.
 
-# Compilar en modo debug
-cargo build
+Las respuestas reflejan el estado devuelto por la API: `executing` no significa ejecución completada. Un fallo de envío no se reporta como entrega exitosa. Los avisos son de mejor esfuerzo; ante desconexiones o saturación consulta `/status` y la API. No hay un segundo ejecutor exclusivo del bot.
 
-# Correr el daemon (usa el script de demo por defecto)
-cargo run
+El polling usa la [Bot API oficial](https://core.telegram.org/bots/api#getupdates). Requiere que no haya otro polling o webhook activo para ese mismo bot. No se desactiva automáticamente una integración existente.
 
-# Compilar el binario optimizado
-cargo build --release
-./target/release/sysgud
+## Contenedores
+
+Con Docker y Compose disponibles, la prueba completa sin credenciales externas se ejecuta con:
+
+```powershell
+docker compose -f compose.demo.yaml up --build --abort-on-container-exit --exit-code-from demo
 ```
 
-### Tests
+Levanta una API aislada y un contenedor de pruebas; termina con código cero si la demo pasa. Para iniciar el servicio con tu `.env` ya configurado, usa `docker compose up --build -d`. Consulta los pasos y la persistencia en [DEMO.md](DEMO.md). No ejecutes la instancia local y el contenedor con el mismo bot simultáneamente.
 
-```bash
-cargo test
+## Entrega de release
+
+Para compilar el ejecutable optimizado de Windows:
+
+```powershell
+cargo build --workspace --locked --release
+./target/release/sysgud.exe --check
+./target/release/sysgud.exe
 ```
 
----
+El archivo entregable es `target/release/sysgud.exe`. Ejecútalo desde la carpeta que contiene tu `.env`; para usar el ejecutable ya compilado no hace falta Rust. `--check` valida la configuración, pero no prueba las credenciales externas.
 
-## ⚙️ Configuración
+Tras un push a `main`, el [workflow de GitHub Actions](https://github.com/Jorge-de-la-Flor/sysgud/actions/workflows/rust.yml) genera el artefacto **sysgud-linux-release** si pasa la demo Docker. Incluye el binario Linux `sysgud`, la imagen `sysgud-image.tar.gz`, `SHA256SUMS` y `RELEASE.txt`. Los artefactos se conservan siete días. Descarga el de la ejecución correcta y extrae su ZIP en `target/release-package/linux`.
 
-Todas las variables son opcionales; ver [`.env.example`](./.env.example) para el detalle completo. Las más relevantes:
+Con Docker Desktop iniciado en modo Linux, carga la imagen sin recompilarla:
 
-| Variable               | Default          | Descripción                                              |
-|------------------------|------------------|-----------------------------------------------------------|
-| `ANTHROPIC_API_KEY`    | *(vacío)*        | Si falta, el agente degrada a `NOTIFY` sin fallar.        |
-| `SYSGUD_MODEL`         | `claude-sonnet-5`| Modelo invocado en la API de Messages.                    |
-| `SYSGUD_CONTEXT_LINES` | `12`             | Tamaño del buffer circular de contexto.                   |
-| `SYSGUD_TARGET_CMD`    | `python3`        | Binario del proceso supervisado.                          |
-| `SYSGUD_TARGET_ARGS`   | *(demo OOM)*     | Argumentos del proceso supervisado, separados por espacio.|
+```powershell
+docker load -i target/release-package/linux/sysgud-image.tar.gz
+```
 
----
+Desde la raíz del proyecto, con `.env` configurado y la instancia anterior detenida, inicia la imagen:
 
-## 📋 Remediation Action Schema
+```powershell
+docker run -d --name sysgud --env-file .env `
+  -e SYSGUD_LOAD_DOTENV=false -e SYSGUD_MONITOR_ENABLED=false `
+  -e SYSGUD_API_HOST=0.0.0.0 -e SYSGUD_API_PORT=3000 `
+  -e SYSGUD_DATABASE=/app/.data/sysgud.sqlite `
+  -p 127.0.0.1:3000:3000 -v sysgud-data:/app/.data `
+  --read-only --tmpfs "/tmp:rw,noexec,nosuid,mode=1777,size=16m" `
+  --cap-drop ALL --security-opt no-new-privileges:true sysgud:release
+```
 
-El agente devuelve JSON estricto que deserializa directo a `sysgud::core::AgentAction`:
+Las credenciales se entregan al iniciar y nunca se incluyen en la imagen. La API queda accesible solo desde el equipo en `http://127.0.0.1:3000`. Consulta `docker logs --tail 50 sysgud`; detén con `docker stop sysgud` y vuelve a iniciar con `docker start sysgud`. El volumen `sysgud-data` conserva los datos de este contenedor; Compose administra un volumen separado bajo el nombre de su proyecto. Mantén una sola instancia consultando el mismo bot de Telegram.
 
-| Action Type | Descripción                                                        | Ejemplo de payload |
-|-------------|---------------------------------------------------------------------|---------------------|
-| `NOTIFY`    | Reporta el diagnóstico en consola sin tocar el proceso supervisado. | `{"action_type": "NOTIFY", "command": null, "diagnosis": "OOM in worker thread"}` |
-| `KILL`      | Termina el proceso supervisado (usa el PID capturado por el monitor).| `{"action_type": "KILL", "command": null, "diagnosis": "Deadlock detected"}` |
-| `EXECUTE`   | Corre un comando de shell de remediación.                           | `{"action_type": "EXECUTE", "command": "rm -f /tmp/lock", "diagnosis": "Stale lock file"}` |
+El binario `sysgud` del artefacto es para Linux, no Windows. Para ejecutarlo directamente en Linux, restaura el permiso con `chmod +x sysgud`; cargar la imagen con Docker conserva los permisos automáticamente.
 
----
+## Monitor y política de acciones
 
-## 🔀 ¿Y si esto crece y necesito separar en crates?
+Establece `SYSGUD_MONITOR_ENABLED=true`, `SYSGUD_TARGET_CMD` y `SYSGUD_TARGET_ARGS`. Los argumentos aceptan un array JSON, incluyendo `[]`. También se conserva la sintaxis simple de comillas sin expansión de variables. Una configuración inválida falla al iniciar.
 
-Si en algún momento un módulo necesita compilarse independiente (por ejemplo, publicar `core` como librería standalone, o reusar `monitor` en otro binario sin arrastrar `reqwest`), el camino es:
+- `NOTIFY`: registra el diagnóstico y, si configuraste avisos, lo comunica. Aprobarlo solo registra la decisión.
+- `KILL`: solo puede terminar el hijo que posee el monitor. Una solicitud HTTP nunca elige un PID. Tras reiniciar, los handles antiguos no se recuperan y esos KILL quedan bloqueados.
+- `EXECUTE`: el campo `command` del agente debe ser un ID incluido en `SYSGUD_COMMANDS_JSON`. Cada ID apunta a un ejecutable absoluto existente y argumentos literales. La API muestra la invocación completa en `execution`. Cambiar esa definición invalida las aprobaciones pendientes correspondientes. Sin configuración, EXECUTE está bloqueado.
 
-1. `cargo new --lib crates/sysgud-<modulo>` y mover el contenido de `src/<modulo>.rs` + `src/<modulo>/` ahí adentro.
-2. Cambiar `use crate::<modulo>::...` por `use sysgud_<modulo>::...` en los lugares que lo consuman.
-3. Agregar la entrada en `[workspace]` y la dependencia `path = "crates/sysgud-<modulo>"`.
+Los comandos no pasan por un shell construido con texto del modelo. Se cierran stdin/stdout/stderr, se filtran variables sensibles y se limita cada ejecución a 30 segundos. Esto no es un sandbox de sistema operativo: el ejecutable autorizado tiene los permisos de sysgud y podría crear descendientes. Usa una cuenta con permisos limitados y configura solo programas que conozcas.
 
-Es un refactor mecánico y acotado — no hace falta pagar ese costo de antemano.
+Las credenciales conocidas del entorno y patrones habituales se ocultan antes del almacenamiento y del LLM. La redacción no garantiza reconocer todos los secretos posibles: evita supervisar logs con datos que no deban salir del equipo. Sin `ANTHROPIC_API_KEY` no se llama al modelo.
 
----
+## Límites del workspace
 
-## 📄 Licencia
+- `sysgud-core`: tipos y contrato de incidentes. Solo depende directamente de serde, chrono y uuid.
+- `sysgud-runtime`: monitor, agente, redacción, SQLite y ejecución autorizada. No depende de los transportes.
+- `sysgud-api`: HTTP, autenticación, validación y traducción de errores. Delega las decisiones al runtime.
+- `sysgud-telegram`: transporte de Telegram y cliente de la API. No puede ejecutar procesos; sus dependencias normales solo acceden al dominio.
+- `sysgud`: configuración y ciclo de vida. Compone los cuatro crates.
 
-Por ahora este es código cerrado — todavía no está decidida la licencia definitiva. El badge de licencia se actualizará cuando eso se resuelva.
+`scripts/check-boundaries.py` comprueba las dependencias entre crates en CI. Las dependencias de pruebas del bot permiten verificar su integración con la API sin contactar Telegram.
+
+Límites operativos: líneas de 8 KiB, contexto de 32 KiB por origen, 256 orígenes, cola de 256 líneas por monitor, 4 análisis simultáneos, 30 análisis por minuto, 60 eventos por segundo, 4 ejecuciones simultáneas y 32 solicitudes HTTP activas. El cuerpo HTTP se limita a 16 KiB y cada solicitud a 40 segundos. La lista usa páginas de hasta 100 registros.
+
+SQLite retiene 1000 incidentes por defecto, configurable hasta 10000. Al llenarse elimina el incidente terminal más antiguo; nunca elimina pendientes o ejecuciones en curso para aceptar otro. Si solo hay pendientes devuelve capacidad agotada: resuélvelos antes de seguir. La caducidad de aprobación es de 15 minutos por defecto; rechazar sigue disponible.
+
+Una sola instancia puede usar cada base. Un fallo de escritura bloquea nuevas acciones y hace fallar `/health`. Tras una interrupción durante EXECUTE/KILL, el resultado se marca como desconocido y no se reintenta. Las notificaciones de Telegram no tienen una cola durable.
+
+## Verificación
+
+```powershell
+./scripts/verify.ps1
+```
+
+Ejecuta formato, pruebas del workspace, Clippy con advertencias como errores y comprobación de límites entre crates. Las pruebas cubren autenticación, actores, propuestas inmutables, reintentos concurrentes, errores de ejecución, persistencia tras reiniciar, recuperación de resultados desconocidos, retención, redacción de secretos y Telegram contra servidores HTTP de prueba.
+
+Para reproducir el flujo HTTP con una base temporal y sin credenciales externas: `python scripts/smoke-api.py`, después de `cargo build`.
+
+El archivo [OpenAPI](crates/sysgud-api/openapi.json) describe las rutas y también se sirve autenticado en `/api/v1/openapi.json`. Las pruebas locales no sustituyen una prueba real con tu bot, tus usuarios y tu modelo. El CI preparado cubre Windows y Linux; sus ejecuciones remotas dependen de publicar los cambios.
+
+No se ha definido una licencia pública para este proyecto.

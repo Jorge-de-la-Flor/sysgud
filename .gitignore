@@ -1,6 +1,13 @@
 /target
-Cargo.lock
 .env
+.env.*
+!.env.example
+.data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.pdb
 .atl/
 .gga
+__pycache__/
+*.pyc

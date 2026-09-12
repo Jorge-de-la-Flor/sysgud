@@ -1,115 +1,175 @@
-//! Orquestación de alto nivel de sysgud.
-//!
-//! Cablea los cuatro módulos principales de la arquitectura:
-//!
-//! - [`monitor`]: ingesta del proceso objetivo + buffer circular.
-//! - [`agent`]: construcción del payload y llamada al LLM.
-//! - [`actions`]: ejecución de la remediación decidida por el agente.
-//! - [`telegram`]: notificaciones salientes y comandos entrantes.
-//!
-//! `core` contiene los tipos, config y errores compartidos entre los cuatro.
+//! Composition root: configuration and lifecycle; crates enforce capability boundaries.
+mod config;
+use runtime::{agent::AgentClient, AppState, Target};
+use std::{
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
+pub use sysgud_api as api;
+pub use sysgud_core as core;
+pub use sysgud_runtime as runtime;
+use tokio::sync::{watch, Mutex};
 
-pub mod actions;
-pub mod agent;
-pub mod core;
-pub mod monitor;
-pub mod telegram;
-
-use colored::*;
-
-use actions::execute as run_action;
-use agent::AgentClient;
-use core::{AgentRequest, Config};
-use monitor::{is_trigger, spawn, RingBuffer};
-use telegram::{is_enabled, TelegramCtx};
-use tokio::sync::Mutex;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::task::JoinHandle;
-
-/// Punto de entrada de la aplicación. Se ejecuta hasta que el
-/// proceso objetivo termina o se recibe una señal de cierre.
 pub async fn run() -> anyhow::Result<()> {
-    println!(
-        "{}",
-        "=== SystemGuard Runtime Agent Active ===".green().bold()
-    );
-
-    let config = Config::from_env();
-    let args: Vec<&str> = config.target_args.iter().map(String::as_str).collect();
-
-    let mut handle = spawn(&config.target_program, &args)?;
-    let target_pid = handle.child.id();
-
-    let mut buffer = RingBuffer::new(config.context_lines);
-    let agent = AgentClient::new(config.api_key.clone(), config.model.clone());
-
-    let telegram_ctx: Arc<Mutex<TelegramCtx>> = Arc::new(Mutex::new(TelegramCtx::new(&config)));
-    let poll_ctx = telegram_ctx.clone();
-
-    // Lanza el polling de Telegram concurrentemente con el monitor
-    // solo cuando el módulo está habilitado.
-    let poll_handle: Option<JoinHandle<Result<(), anyhow::Error>>> = if is_enabled(&config) {
-        let client = {
-            let ctx_guard = poll_ctx.lock().await;
-            ctx_guard.client.clone()
-        };
-        client.map(|c| Some(tokio::spawn(telegram::updates::spawn_poll(c, poll_ctx)))).unwrap_or(None)
+    if config::boolean("SYSGUD_LOAD_DOTENV", true)? {
+        match dotenvy::dotenv() {
+            Ok(_) => {}
+            Err(dotenvy::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => anyhow::bail!("no se pudo cargar .env; revise su formato"),
+        }
+    }
+    let config = config::Config::from_env()?;
+    let state = AppState::with_options(
+        AgentClient::new(config.api_key.clone(), config.model.clone()),
+        config.token.clone(),
+        &config.allowed_users,
+        config.context_lines,
+        config.options.clone(),
+    )?;
+    let telegram = if config.telegram_enabled {
+        if let Some(chat) = config.telegram_chat_id {
+            anyhow::ensure!(
+                state.actor_allowed(chat),
+                "TELEGRAM_CHAT_ID debe ser el chat privado de un usuario permitido"
+            );
+        }
+        Some(sysgud_telegram::Bot::new(
+            config
+                .telegram_token
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("falta TELEGRAM_BOT_TOKEN"))?,
+            config.token.clone(),
+            config.api_port,
+            &config.allowed_users,
+        )?)
     } else {
         None
     };
-    // poll_ctx is consumed by spawn_poll or dropped here
-
-    // Handler para Ctrl+C: aborta el poll y termina limpiamente.
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let shutdown_flag_clone = shutdown_flag.clone();
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        shutdown_flag_clone.store(true, Ordering::SeqCst);
-    });
-
-    loop {
-        if shutdown_flag.load(Ordering::SeqCst) {
-            println!("{}", "\n[!] Shutdown signal received.".yellow());
-            if let Some(h) = &poll_handle {
-                h.abort();
+    if std::env::args().any(|arg| arg == "--check") {
+        println!(
+            "Configuración válida. Monitor: {}; Telegram: {}; LLM: {}.",
+            config.monitor_enabled,
+            config.telegram_enabled,
+            config.api_key.is_some()
+        );
+        return Ok(());
+    }
+    let listener = tokio::net::TcpListener::bind((config.api_host, config.api_port)).await?;
+    println!("sysgud API: http://{}", listener.local_addr()?);
+    let (stop, receiver) = watch::channel(false);
+    let notifications = telegram
+        .clone()
+        .zip(config.telegram_chat_id)
+        .map(|(bot, chat)| {
+            let events = state.subscribe();
+            tokio::spawn(async move { bot.notifications(chat, events).await })
+        });
+    let monitor = if config.monitor_enabled {
+        let monitor_state = state.clone();
+        Some(tokio::spawn(async move {
+            if let Err(error) = run_monitor(config, monitor_state.clone(), receiver).await {
+                eprintln!(
+                    "Monitor detenido: {}",
+                    monitor_state.redact(&error.to_string())
+                );
             }
-            break;
+        }))
+    } else {
+        None
+    };
+    let telegram = telegram.map(|bot| tokio::spawn(async move { bot.run().await }));
+    let shutdown_state = state.clone();
+    let result = axum::serve(listener, api::router(state.clone()))
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            let _ = stop.send(true);
+            shutdown_state.shutdown().await;
+        })
+        .await;
+    if let Some(task) = telegram {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(task) = notifications {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(mut task) = monitor {
+        if tokio::time::timeout(Duration::from_secs(5), &mut task)
+            .await
+            .is_err()
+        {
+            task.abort();
+            let _ = task.await;
         }
+    }
+    state.shutdown().await;
+    result?;
+    Ok(())
+}
 
-        match handle.lines.recv().await {
-            Some(line) => {
-                println!("[SYS LOG] {}", line);
-                buffer.push(line.clone());
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        if let Ok(mut terminate) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
 
-                if is_trigger(&line) {
-                    println!(
-                        "{}",
-                        "\n[!] Target event detected. Invoking System Agent..."
-                            .yellow()
-                            .bold()
-                    );
-
-                    let request = AgentRequest {
-                        system_context: "Rust async supervised process".to_string(),
-                        log_extract: buffer.snapshot(),
-                    };
-
-                    let action = agent.analyze(request).await?;
-                    let ctx = telegram_ctx.lock().await;
-                    run_action(action, target_pid, &ctx).await?;
-                    // Se elimina el `break`: el loop continúa hasta
-                    // que el proceso hijo termina o se recibe Ctrl+C.
-                    drop(ctx);
+async fn run_monitor(
+    config: config::Config,
+    state: AppState,
+    mut stop: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let args: Vec<&str> = config.target_args.iter().map(String::as_str).collect();
+    let handle = runtime::monitor::spawn(&config.target_program, &args)?;
+    let target: Target = Arc::new(Mutex::new(handle.child));
+    let mut lines = handle.lines;
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    let mut exited_at = None;
+    let mut streams_closed = false;
+    let mut last_analysis = None;
+    loop {
+        tokio::select! {
+            _ = stop.changed() => {
+                let mut child = target.lock().await;
+                if child.try_wait()?.is_none() { child.kill().await?; }
+                break;
+            }
+            _ = ticker.tick() => {
+                let dropped = handle.dropped_lines.swap(0, Ordering::Relaxed);
+                if dropped > 0 { eprintln!("Monitor: {dropped} líneas descartadas por tamaño o saturación"); }
+                if target.lock().await.try_wait()?.is_some() {
+                    let when = exited_at.get_or_insert_with(tokio::time::Instant::now);
+                    if streams_closed || when.elapsed() >= Duration::from_secs(2) { break; }
                 }
             }
-            None => break,
+            line = lines.recv(), if !streams_closed => {
+                let Some(line) = line else { streams_closed = true; continue; };
+                // Bound paid analyses while continuing to drain the child pipes.
+                let trigger = runtime::monitor::is_trigger(&line);
+                if trigger && last_analysis.is_some_and(|last: tokio::time::Instant| last.elapsed() < Duration::from_secs(10)) { continue; }
+                if trigger { last_analysis = Some(tokio::time::Instant::now()); }
+                let ingest = state.ingest(config.target_program.clone(), line, Some(target.clone()));
+                tokio::select! {
+                    result = ingest => match result {
+                        Ok(Some(incident)) => println!("Incidente {}: {:?}; pendiente de aprobación", incident.id, incident.proposed_action.action_type),
+                        Ok(None) => {},
+                        Err(error) => eprintln!("Monitor: {error}"),
+                    },
+                    _ = stop.changed() => {
+                        let mut child = target.lock().await;
+                        if child.try_wait()?.is_none() { child.kill().await?; }
+                        break;
+                    }
+                }
+            }
         }
     }
-
-    if let Some(h) = poll_handle {
-        let _ = h.await;
-    }
-    let _ = handle.child.wait().await;
     Ok(())
 }
