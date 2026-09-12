@@ -39,16 +39,6 @@ En Windows, `./scripts/start-telegram.ps1` vincula la cuenta y arranca el servic
 
 Para grabar el flujo, usa `python scripts/demo-api.py` o, con Telegram vinculado y el servicio iniciado, `python scripts/demo-telegram.py`. El [guion de video](DEMO.md) incluye ambas demostraciones y sus requisitos.
 
-## Contenedores
-
-Con Docker y Compose disponibles, la prueba completa sin credenciales externas se ejecuta con:
-
-```powershell
-docker compose -f compose.demo.yaml up --build --abort-on-container-exit --exit-code-from demo
-```
-
-Levanta una API aislada y un contenedor de pruebas; termina con código cero si la demo pasa. Para iniciar el servicio con tu `.env` ya configurado, usa `docker compose up --build -d`. Consulta los pasos y la persistencia en [DEMO.md](DEMO.md). No ejecutes la instancia local y el contenedor con el mismo bot simultáneamente.
-
 Para habilitar el bot, añade usuarios permitidos y establece `SYSGUD_TELEGRAM_ENABLED=true`. `TELEGRAM_ALLOWLIST` se admite como alias de la rama original; si ambas listas tienen valores deben coincidir. `TELEGRAM_CHAT_ID` es opcional y debe ser el chat privado de uno de esos usuarios para recibir avisos de nuevos incidentes.
 
 Abre una conversación privada con tu bot y usa:
@@ -64,6 +54,16 @@ Se conservan los sufijos como `/status@nombre_bot`. Los comandos globales `/appr
 Las respuestas reflejan el estado devuelto por la API: `executing` no significa ejecución completada. Un fallo de envío no se reporta como entrega exitosa. Los avisos son de mejor esfuerzo; ante desconexiones o saturación consulta `/status` y la API. No hay un segundo ejecutor exclusivo del bot.
 
 El polling usa la [Bot API oficial](https://core.telegram.org/bots/api#getupdates). Requiere que no haya otro polling o webhook activo para ese mismo bot. No se desactiva automáticamente una integración existente.
+
+## Contenedores
+
+Con Docker y Compose disponibles, la prueba completa sin credenciales externas se ejecuta con:
+
+```powershell
+docker compose -f compose.demo.yaml up --build --abort-on-container-exit --exit-code-from demo
+```
+
+Levanta una API aislada y un contenedor de pruebas; termina con código cero si la demo pasa. Para iniciar el servicio con tu `.env` ya configurado, usa `docker compose up --build -d`. Consulta los pasos y la persistencia en [DEMO.md](DEMO.md). No ejecutes la instancia local y el contenedor con el mismo bot simultáneamente.
 
 ## Monitor y política de acciones
 
