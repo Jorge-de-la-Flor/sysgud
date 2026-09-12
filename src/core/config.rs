@@ -17,6 +17,12 @@ pub struct Config {
     pub target_program: String,
     /// `SYSGUD_TARGET_ARGS`. Argumentos separados por espacio para el proceso objetivo.
     pub target_args: Vec<String>,
+    /// `TELEGRAM_BOT_TOKEN`. Token del bot de Telegram para notificaciones.
+    pub telegram_bot_token: Option<String>,
+    /// `TELEGRAM_CHAT_ID`. Chat ID de destino para las notificaciones.
+    pub telegram_chat_id: Option<String>,
+    /// `TELEGRAM_ALLOWLIST`. IDs de remitentes permitidos (CSV).
+    pub telegram_allowlist: Vec<String>,
 }
 
 impl Config {
@@ -35,6 +41,18 @@ impl Config {
                 .collect::<Vec<_>>()
         };
 
+        let telegram_bot_token = env::var("TELEGRAM_BOT_TOKEN").ok();
+        let telegram_chat_id = env::var("TELEGRAM_CHAT_ID").ok();
+        let telegram_allowlist = env::var("TELEGRAM_ALLOWLIST")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Self {
             api_key: env::var("ANTHROPIC_API_KEY").ok(),
             model: env::var("SYSGUD_MODEL").unwrap_or_else(|_| "claude-sonnet-5".to_string()),
@@ -44,6 +62,9 @@ impl Config {
                 .unwrap_or(12),
             target_program,
             target_args,
+            telegram_bot_token,
+            telegram_chat_id,
+            telegram_allowlist,
         }
     }
 }
@@ -57,4 +78,48 @@ fn default_demo_args() -> Vec<String> {
          print('CRITICAL ERROR: OutOfMemory in process_data()'); sys.exit(1)"
             .to_string(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn from_env_parses_telegram_fields() {
+        env::set_var("TELEGRAM_BOT_TOKEN", "bot-token-abc");
+        env::set_var("TELEGRAM_CHAT_ID", "12345");
+        env::set_var("TELEGRAM_ALLOWLIST", "111, 222, 333");
+
+        let config = Config::from_env();
+
+        assert_eq!(config.telegram_bot_token, Some("bot-token-abc".to_string()));
+        assert_eq!(config.telegram_chat_id, Some("12345".to_string()));
+        assert_eq!(config.telegram_allowlist, vec!["111", "222", "333"]);
+
+        env::remove_var("TELEGRAM_BOT_TOKEN");
+        env::remove_var("TELEGRAM_CHAT_ID");
+        env::remove_var("TELEGRAM_ALLOWLIST");
+    }
+
+    #[test]
+    fn from_env_telegram_fields_missing_when_unset() {
+        env::remove_var("TELEGRAM_BOT_TOKEN");
+        env::remove_var("TELEGRAM_CHAT_ID");
+        env::remove_var("TELEGRAM_ALLOWLIST");
+
+        let config = Config::from_env();
+
+        assert_eq!(config.telegram_bot_token, None);
+        assert_eq!(config.telegram_chat_id, None);
+        assert!(config.telegram_allowlist.is_empty());
+    }
+
+    #[test]
+    fn from_env_allowlist_empty_string_is_empty_vec() {
+        env::set_var("TELEGRAM_ALLOWLIST", "");
+        let config = Config::from_env();
+        assert!(config.telegram_allowlist.is_empty());
+        env::remove_var("TELEGRAM_ALLOWLIST");
+    }
 }

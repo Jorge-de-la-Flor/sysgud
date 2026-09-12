@@ -2,3 +2,5 @@
 Cargo.lock
 .env
 *.pdb
+.atl/
+.gga
