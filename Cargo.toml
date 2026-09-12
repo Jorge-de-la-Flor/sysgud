@@ -7,6 +7,7 @@ description = "Autonomous, zero-latency system runtime agent for proactive termi
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.11", features = ["json"] }
+openssl-sys = { version = "0.9", features = ["vendored"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"

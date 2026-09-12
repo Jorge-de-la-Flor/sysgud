@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 
 /// Tipo de remediación que el agente puede decidir aplicar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,4 +34,43 @@ pub struct AgentAction {
     pub command: Option<String>,
     /// Explicación técnica breve y legible por humanos.
     pub diagnosis: String,
+}
+
+/// Aprobación pendiente que espera confirmación desde Telegram.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingApproval {
+    /// La acción a ejecutar una vez aprobada.
+    pub action: AgentAction,
+    /// El PID del proceso objetivo (solo relevante para `Kill`).
+    pub pid: Option<u32>,
+}
+
+/// Almacén compartido de aprobaciones pendientes entre el loop de
+/// monitor y el task de polling de Telegram.
+#[derive(Debug, Default)]
+pub struct PendingStore(Arc<Mutex<Option<PendingApproval>>>);
+
+impl PendingStore {
+    /// Crea un almacén vacío.
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(None)))
+    }
+
+    /// Guarda una aprobación pendiente.
+    pub fn store(&self, approval: PendingApproval) {
+        let mut guard = self.0.lock().unwrap();
+        *guard = Some(approval);
+    }
+
+    /// Devuelve la aprobación pendiente y la limpia.
+    pub fn take(&self) -> Option<PendingApproval> {
+        let mut guard = self.0.lock().unwrap();
+        guard.take()
+    }
+
+    /// Devuelve `true` si hay una aprobación sin confirmar.
+    pub fn has_pending(&self) -> bool {
+        let guard = self.0.lock().unwrap();
+        guard.is_some()
+    }
 }

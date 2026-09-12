@@ -9,4 +9,4 @@ pub mod types;
 
 pub use config::Config;
 pub use error::SysgudError;
-pub use types::{ActionType, AgentAction, AgentRequest};
+pub use types::{ActionType, AgentAction, AgentRequest, PendingApproval, PendingStore};

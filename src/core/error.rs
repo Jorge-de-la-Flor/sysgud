@@ -16,4 +16,19 @@ pub enum SysgudError {
 
     #[error("la ejecución de la acción falló: {0}")]
     Action(String),
+
+    #[error("telegram error: {0}")]
+    Telegram(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn telegram_error_contains_prefix() {
+        let err = SysgudError::Telegram("connection refused".to_string());
+        assert!(format!("{}", err).contains("telegram error"));
+        assert!(format!("{}", err).contains("connection refused"));
+    }
 }
